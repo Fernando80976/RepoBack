@@ -4,6 +4,10 @@ import json
 
 app = FastAPI()
 
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
 # CORS (para React)
 app.add_middleware(
     CORSMiddleware,
