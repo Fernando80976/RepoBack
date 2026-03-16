@@ -71,6 +71,7 @@ async def ws_endpoint(ws: WebSocket):
                 battle_state["turn"] = "enemy"
 
         if battle_state["enemy"]["hp"] <= 0:
+            battle_state["enemy"]["hp"]=0
             battle_state["log"].append("YOU WIN!")
             await ws.send_json(battle_state)
             continue
