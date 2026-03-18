@@ -6,7 +6,7 @@ import copy
 import json
 import os
 import random
-
+from typing import Any, Dict, List, Literal
 load_dotenv()
 
 app = FastAPI()
@@ -198,6 +198,68 @@ def process_turn(state: dict, skill_index: int) -> None:
 
     trim_log(state)
 
+
+HunterRank = Literal["E", "D", "C", "B", "A", "S", "SS", "National"]
+VALID_RANKS = {"E", "D", "C", "B", "A", "S", "SS", "National"}
+
+def as_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+def as_int(value: Any, default: int = 0) -> int:
+    return value if isinstance(value, (int, float)) else default
+
+def as_str(value: Any, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+def as_rank(value: Any) -> str:
+    return value if isinstance(value, str) and value in VALID_RANKS else "E"
+
+def map_profile_to_ranking(username: str, game_data: Any) -> Dict[str, Any]:
+    data = as_dict(game_data)
+    stats = as_dict(data.get("stats"))
+    shadows = data.get("shadows")
+    shadows_count = len(shadows) if isinstance(shadows, list) else 0
+
+    strength = as_int(stats.get("strength"))
+    agility = as_int(stats.get("agility"))
+    vitality = as_int(stats.get("vitality"))
+    intelligence = as_int(stats.get("intelligence"))
+    perception = as_int(stats.get("perception"))
+
+    power_score = strength + agility + vitality + intelligence + perception + shadows_count * 10
+
+    return {
+        "username": username,
+        "name": as_str(data.get("name"), username),
+        "title": as_str(data.get("title"), "Hunter"),
+        "level": as_int(data.get("level"), 1),
+        "rank": as_rank(data.get("hunterRank")),
+        "kills": as_int(data.get("totalMonstersKilled")),
+        "dungeons": as_int(data.get("totalDungeonClears")),
+        "shadows": shadows_count,
+        "powerScore": power_score,
+    }
+
+@app.get("/ranking")
+def ranking():
+    result = (
+        supabase.table("player_profiles")
+        .select("username,game_data")
+        .order("updated_at", desc=True)
+        .limit(300)
+        .execute()
+    )
+
+    rows = result.data or []
+    players: List[Dict[str, Any]] = []
+
+    for row in rows:
+        username = (row.get("username") or "").strip().lower()
+        if not username:
+            continue
+        players.append(map_profile_to_ranking(username, row.get("game_data")))
+
+    return {"players": players}
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
