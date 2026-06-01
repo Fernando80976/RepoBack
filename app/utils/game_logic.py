@@ -1,4 +1,4 @@
-# Fachada de compatibilidad — re-exporta todo para no romper imports existentes.
+# Fachada de compatibilidad - re-exporta todo para no romper imports existentes.
 from app.utils.battle.constants import INT4_MAX, _cap_int4
 from app.utils.battle.entities import (
     _load_player,
