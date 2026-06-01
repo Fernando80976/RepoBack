@@ -15,8 +15,8 @@ def _auto_assign_dungeon_missions(user_id: str, player_level: int, dungeons: lis
     try:
         unlocked_dungeon_ids = {
             int(d["id"]) for d in dungeons
-            if not d.get("min_level_required")  # NULL o 0 = siempre disponible
-            or int(d["min_level_required"]) <= player_level
+            if not d.get("min_level")  # NULL o 0 = siempre disponible
+            or int(d["min_level"]) <= player_level
         }
 
         catalog_res = (
@@ -88,6 +88,49 @@ def _auto_assign_dungeon_missions(user_id: str, player_level: int, dungeons: lis
         return
 
 
+def _auto_assign_level_missions(user_id: str, player_level: int) -> None:
+    """
+    Asigna todas las misiones de la tabla 'missions' cuyo min_level <= player_level y que el usuario no tenga activas.
+    """
+    try:
+        # Todas las misiones desbloqueables por nivel
+        missions_res = (
+            supabase_db.table("missions")
+            .select("id, min_level")
+            .lte("min_level", player_level)
+            .execute()
+        )
+        missions = missions_res.data or []
+        if not missions:
+            return
+        mission_ids = [m["id"] for m in missions]
+        # Ya asignadas
+        existing_res = (
+            supabase_db.table("hunter_missions")
+            .select("mission_id")
+            .eq("hunter_id", user_id)
+            .in_("mission_id", mission_ids)
+            .execute()
+        )
+        assigned_ids = {row["mission_id"] for row in (existing_res.data or [])}
+        now = datetime.now(timezone.utc).isoformat()
+        for mission in missions:
+            if mission["id"] in assigned_ids:
+                continue
+            try:
+                supabase_db.table("hunter_missions").insert({
+                    "hunter_id": user_id,
+                    "mission_id": mission["id"],
+                    "current_progress": 0,
+                    "status": "active",
+                    "started_at": now,
+                }).execute()
+            except Exception:
+                continue
+    except Exception:
+        return
+
+
 @router.get("/")
 async def get_all_dungeons(user_id: str = Depends(validate_hunter_session)):
     """Devuelve el catalogo completo de mazmorras."""
@@ -104,5 +147,6 @@ async def get_all_dungeons(user_id: str = Depends(validate_hunter_session)):
     player_level = int((profile_res.data or {}).get("level") or 1)
 
     _auto_assign_dungeon_missions(user_id, player_level, dungeons)
+    _auto_assign_level_missions(user_id, player_level)
 
     return dungeons

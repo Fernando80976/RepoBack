@@ -157,12 +157,13 @@ def _use_potion(state: dict, user_id: str, inventory_id: int) -> bool:
     p = state["player"]
     before_hp = int(p.get("hp") or 0)
     before_mp = int(p.get("mp") or 0)
+
     heal_hp = 0
     heal_mp = 0
+    heal_fatigue = 0
 
-    # Soporta pociones de vitalidad/inteligencia como el equipamiento
+    # Soporta pociones de vitalidad/inteligencia/fatiga (acepta variantes y typos)
     if stat_type in ("hp", "health", "heal", "hp_current", "vitality"):
-        # Si es vitalidad, multiplica por 15
         heal = amount * 15 if stat_type == "vitality" else amount
         p["hp"] = min(int(p.get("max_hp") or 0), before_hp + heal)
         heal_hp = p["hp"] - before_hp
@@ -171,7 +172,6 @@ def _use_potion(state: dict, user_id: str, inventory_id: int) -> bool:
         p["mp"] = min(int(p.get("max_mp") or 0), before_mp + heal)
         heal_mp = p["mp"] - before_mp
     elif stat_type in ("both", "hp_mp", "all"):
-        # Si la pocion tiene ambos stats, espera dos campos: stat_value_hp y stat_value_mp
         amount_hp = int(item.get("stat_value_hp") or amount)
         amount_mp = int(item.get("stat_value_mp") or amount)
         p["hp"] = min(int(p.get("max_hp") or 0), before_hp + amount_hp)
@@ -179,18 +179,22 @@ def _use_potion(state: dict, user_id: str, inventory_id: int) -> bool:
         heal_hp = p["hp"] - before_hp
         heal_mp = p["mp"] - before_mp
     elif stat_type == "vit_int":
-        # Custom: cura ambos, usando la fórmula de equipamiento
         heal_hp = amount * 15
         heal_mp = amount * 5
         p["hp"] = min(int(p.get("max_hp") or 0), before_hp + heal_hp)
         p["mp"] = min(int(p.get("max_mp") or 0), before_mp + heal_mp)
         heal_hp = p["hp"] - before_hp
         heal_mp = p["mp"] - before_mp
+    elif stat_type in ("fatigue", "fatiga", "fatige", "fatiga_max", "fatigue_max"):
+        before_fatigue = int(p.get("fatigue") or 0)
+        min_fatigue = 0
+        heal_fatigue = min(amount, before_fatigue)
+        p["fatigue"] = max(min_fatigue, before_fatigue - amount)
     else:
         state["log"].append("Esta pocion tiene un efecto no soportado.")
         return False
 
-    if heal_hp <= 0 and heal_mp <= 0:
+    if heal_hp <= 0 and heal_mp <= 0 and heal_fatigue <= 0:
         state["log"].append("No necesitas usar esa pocion ahora.")
         return False
 
@@ -200,12 +204,15 @@ def _use_potion(state: dict, user_id: str, inventory_id: int) -> bool:
     else:
         supabase_db.table("inventory").update({"quantity": current_qty - 1}).eq("id", inventory_id).execute()
 
+
     if heal_hp > 0 and heal_mp > 0:
         state["log"].append(f"Usas {potion_name}: +{heal_hp} HP y +{heal_mp} MP.")
     elif heal_hp > 0:
         state["log"].append(f"Usas {potion_name}: +{heal_hp} HP.")
-    else:
+    elif heal_mp > 0:
         state["log"].append(f"Usas {potion_name}: +{heal_mp} MP.")
+    elif heal_fatigue > 0:
+        state["log"].append(f"Usas {potion_name}: -{heal_fatigue} Fatiga.")
 
     potions = state["player"].get("potions") or []
     for i, pot in enumerate(potions):

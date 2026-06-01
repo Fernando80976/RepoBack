@@ -9,9 +9,14 @@ from app.utils.errors import obtener_error_legible
 from app.routers import auth_router, hunter_router, missions_router, skills_router, shop_router, inventory_router, battle_router, ranking_router, dungeons_router, dle_router
 
 app = FastAPI(title="Solo Leveling API - System")
+#  TEST
+
+# pytest tests/test_flatten_data.py
+# pytest tests/test_errors.py
+
 
 #Comando para crear el entorno virtual:
-# python -m venv venv
+# python -m venv venv o py -3.13 -m venv venv
 
 # Comando para activar venv: 
 # .\venv\Scripts\activate
@@ -29,7 +34,7 @@ app = FastAPI(title="Solo Leveling API - System")
 # tree app /F /A > estructura.txt
 
 # --- CONFIGURACIÓN DE CORS ---
-ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173","https://proy-sdnbdx123-9974s-projects.vercel.app"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ORIGINS,
@@ -48,8 +53,9 @@ async def sistema_unified_handler(request: Request, exc: Exception):
     
     # 2. Validar: si el origen está en nuestra lista permitida, lo usamos. 
     # Si no, usamos el primero de la lista (o None para que el navegador bloquee)
-    if origin not in ORIGINS:
-        origin = None
+    # cors_headers = {"Access-Control-Allow-Credentials": "true"}
+    # if origin:
+    #     cors_headers["Access-Control-Allow-Origin"] = origin
 
     print(f"⚠️ [{status_code}] | {mensaje} | Path: {request.url.path}")
 

@@ -27,9 +27,23 @@ def get_equipment_stat_bonuses(user_id: str) -> dict[str, int]:
     )
     equipment = equipment_res.data or {}
 
+    # 1. Creamos un Set para llevar el control de los IDs ya sumados
+    processed_inventory_ids = set()
+
     for slot_data in equipment.values():
         if not slot_data:
             continue
+
+        # 2. Capturamos el ID único del objeto en el inventario
+        inv_id = slot_data.get("id")
+
+        # 3. Si el ID ya está en el Set, significa que es la otra mitad del arma dual. Lo saltamos.
+        if inv_id in processed_inventory_ids:
+            continue
+        
+        # 4. Añadimos el ID al Set para marcarlo como procesado
+        if inv_id:
+            processed_inventory_ids.add(inv_id)
 
         item = slot_data.get("items")
         if not item:

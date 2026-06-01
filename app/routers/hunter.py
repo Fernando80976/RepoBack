@@ -3,7 +3,9 @@ from datetime import datetime, timezone
 from app.core.config import supabase_db
 from app.models import UpdateStatsSchema, UpdateActiveTitleSchema, SelectClassSchema
 from app.core.security import validate_hunter_session
-from app.utils.equipment_stats import get_equipment_stat_bonuses, apply_equipment_stats #fer
+from app.utils.equipment_stats import get_equipment_stat_bonuses, apply_equipment_stats
+from app.routers.skills import _auto_unlock_skills_by_level
+from app.routers.dungeons import _auto_assign_level_missions
 
 router = APIRouter(prefix="/hunter", tags=["Gremio de Cazadores"])
 
@@ -49,23 +51,6 @@ def _auto_unlock_titles_by_level(user_id: str, player_level: int) -> None:
         # El autodesbloqueo es complementario; si falla, devolvemos titulos igual.
         return
 
-
-# @router.get("/profile")
-# async def get_my_profile(user_id: str = Depends(validate_hunter_session)):
-#     # Si supabase falla, el Handler Global enviará el mensaje de error y el endpoint
-
-#     # # 1. Obtener cliente (reutilizado)
-#     # profile = supabase_db.table("profiles").select("*").eq("id", user_id).single().execute()
-#     # return profile.data
-
-#     profile = supabase_db.table("profiles").select(
-#         "*,"
-#         "player_classes(name, target_stat, stats_bonus)" 
-#     ).eq("id", user_id).single().execute().data
-#     print("Perfil base del cazador:", profile)
-#     bonuses = get_equipment_stat_bonuses(user_id)
-#     return apply_equipment_stats(profile, bonuses)
-
 @router.get("/profile")
 async def get_my_profile(user_id: str = Depends(validate_hunter_session)):
     # 1. Obtenemos el perfil incluyendo la relación con player_classes
@@ -74,6 +59,12 @@ async def get_my_profile(user_id: str = Depends(validate_hunter_session)):
         "*, player_classes(name, target_stat, stats_bonus),active_title:titles!profiles_active_title_id_fkey(stats_effect,effect)"
     ).eq("id", user_id).single().execute()
     
+    player_level = int((res.data or {}).get("level") or 1)
+
+    # Auto-desbloqueo al consultar skills (evita que nivel 1 aparezca sin habilidades).
+    _auto_unlock_skills_by_level(user_id, player_level)
+    _auto_assign_level_missions(user_id, player_level)
+
     profile_raw = res.data
     profile_raw["titles"] = profile_raw.get("active_title") or {}
     
@@ -273,4 +264,21 @@ async def check_player_class(user_id: str = Depends(validate_hunter_session)):
     has_class = result.data.get("class_id") is not None
     return {
         "has_class": has_class
+    }
+
+@router.patch("/tutorial-complete")
+async def mark_tutorial_complete(user_id: str = Depends(validate_hunter_session)):
+    """
+    Marca el tutorial como completado para el cazador.
+    Se ejecuta cuando el usuario termina de ver el tutorial de Joyride.
+    """
+    update_res = supabase_db.table("profiles").update({
+        "has_completed_tutorial": True,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }).eq("id", user_id).execute()
+    
+    return {
+        "status": "success",
+        "message": "MSG_TUTORIAL_COMPLETED",
+        "has_completed_tutorial": True
     }

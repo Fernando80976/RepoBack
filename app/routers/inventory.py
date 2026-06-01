@@ -6,6 +6,57 @@ from app.utils.equipment_stats import get_equipment_stat_bonuses, persist_effect
 
 router = APIRouter(prefix="/inventory", tags=["Inventario"])
 
+@router.post("/use_potion/{inventory_id}")
+async def use_potion(inventory_id: int, user_id: str = Depends(validate_hunter_session)):
+    """
+    Usa una poción del inventario, aplicando el efecto según el tipo y cantidad (incluye fatiga).
+    """
+    
+    from app.utils.battle.combat import _use_potion
+    # Obtener datos del jugador (incluye fatiga si existe)
+    profile_res = supabase_db.table("profiles").select("id, hp_current, hp_max, mp_current, mp_max, fatigue, fatigue_max").eq("id", user_id).single().execute()
+    profile = profile_res.data
+    if not profile:
+        raise HTTPException(status_code=404, detail="ERR_PROFILE_NOT_FOUND")
+
+    # Estado simulado para la función de poción
+    state = {
+        "player": {
+            "hp": int(profile.get("hp_current") or 0),
+            "max_hp": int(profile.get("hp_max") or 0),
+            "mp": int(profile.get("mp_current") or 0),
+            "max_mp": int(profile.get("mp_max") or 0),
+            "fatigue": int(profile.get("fatigue") or 0),
+            "max_fatigue": int(profile.get("fatigue_max") or 0),
+            "potions": []
+        },
+        "log": []
+    }
+    result = _use_potion(state, user_id, inventory_id)
+    if not result:
+    # Mapear el mensaje del log a un código de error
+        error_msg = state["log"][-1] if state["log"] else "ERR_USE_POTION_FAILED"
+        error_code = "ERR_NO_NEED_POTION" if "No necesitas" in error_msg else "ERR_USE_POTION_FAILED"
+        raise HTTPException(status_code=400, detail=error_code)
+
+    # Actualizar los valores de HP, MP y Fatiga en el perfil si corresponde
+    new_hp = state["player"].get("hp", profile.get("hp_current"))
+    new_mp = state["player"].get("mp", profile.get("mp_current"))
+    new_fatigue = state["player"].get("fatigue", profile.get("fatigue"))
+    update_fields = {"hp_current": new_hp, "mp_current": new_mp}
+    # Solo actualiza fatiga si el campo existe en el perfil
+    if "fatigue" in profile:
+        update_fields["fatigue"] = new_fatigue
+    supabase_db.table("profiles").update(update_fields).eq("id", user_id).execute()
+
+    return {
+        "status": "success",
+        "log": state["log"],
+        "hp": new_hp,
+        "mp": new_mp,
+        "fatigue": new_fatigue
+    }
+
 @router.get("/")
 async def get_hunter_inventory(user_id: str = Depends(validate_hunter_session)):
     """
@@ -58,7 +109,8 @@ async def get_hunter_equipment(user_id: str = Depends(validate_hunter_session)):
                 "slot_type": item_info["slot_type"],
                 "rarity": item_info["rarity"],
                 "stat_type": item_info["stat_type"],
-                "stat_value": item_info["stat_value"]
+                "stat_value": item_info["stat_value"],
+                "image_key": item_info.get("image_key")
             }
         else:
             # Si el slot está vacío, devolvemos null de forma clara
@@ -86,49 +138,72 @@ async def equip_item(req: EquipRequest, user_id: str = Depends(validate_hunter_s
     allowed_slot = db_item["slot_type"]
 
     # 2. Validación de lógica de slots
-    is_valid_dual = (allowed_slot == "dual_hand" and requested_slot in ["main_hand", "off_hand"])
+    # Renombramos 'is_valid_dual' a 'is_valid_either' para no confundirlo con el nuevo tipo 'dual_hand'
+    is_valid_either = (allowed_slot == "either_hand" and requested_slot in ["main_hand", "off_hand"])
     is_exact_match = (allowed_slot == requested_slot)
+    
+    # Si es dual_hand, permitimos que el front mande "main_hand" o "both", nosotros lo forzaremos en ambas
+    is_dual_weapon = (allowed_slot == "dual_hand") 
 
-    if not (is_valid_dual or is_exact_match):
-        # Cambiado a código (el front puede manejar la lógica de mostrar qué slot falló)
+    if not (is_valid_either or is_exact_match or is_dual_weapon):
         raise HTTPException(status_code=400, detail="ERR_INVALID_SLOT_FOR_ITEM")
 
     # 3. Capturar bonuses ANTES de cambiar el equipo
     old_bonuses = get_equipment_stat_bonuses(user_id)
 
-    # 4. Actualización directa
-    column_name = f"{requested_slot}_id"
+    # 4. Consultar el equipo actual del cazador (necesario para la lógica de reemplazo)
+    current_eq_res = (
+        supabase_db.table("hunter_equipment")
+        .select("main_hand_id, off_hand_id")
+        .eq("hunter_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    current_eq = current_eq_res.data if current_eq_res.data else {}
+
+    # 5. Preparar los datos a actualizar
     update_data = {
-        "hunter_id": user_id,
-        column_name: req.inventory_id
+        "hunter_id": user_id
     }
 
-    # --- LÓGICA DE INTERCAMBIO (SWAP) ---
-    # Si el objeto es para las manos, verificamos que no esté ya en la otra mano
-    if requested_slot in ["main_hand", "off_hand"]:
-        # Determinar cuál es la "otra mano"
-        other_hand = "off_hand" if requested_slot == "main_hand" else "main_hand"
-        
-        # Consultar el equipo actual del cazador
-        current_eq = supabase_db.table("hunter_equipment") \
-            .select("main_hand_id, off_hand_id") \
-            .eq("hunter_id", user_id) \
-            .single() \
-            .execute()
+    # --- LÓGICA DE ASIGNACIÓN Y DESEQUIPADO ---
+    if allowed_slot == "dual_hand":
+        # Un arma de dos manos ocupa ambos slots obligatoriamente
+        update_data["main_hand_id"] = req.inventory_id
+        update_data["off_hand_id"] = req.inventory_id
+    else:
+        # Es un arma de una mano (o armadura si implementas más slots después)
+        update_data[f"{requested_slot}_id"] = req.inventory_id
 
-        if current_eq.data:
-            # Si el ID que quiero equipar ya está en la otra mano, la vaciamos
-            if current_eq.data.get(f"{other_hand}_id") == req.inventory_id:
-                update_data[f"{other_hand}_id"] = None
-    
+        # Lógica de conflicto para las manos
+        if requested_slot in ["main_hand", "off_hand"]:
+            other_hand = "off_hand" if requested_slot == "main_hand" else "main_hand"
+            
+            if current_eq:
+                current_main = current_eq.get("main_hand_id")
+                current_off = current_eq.get("off_hand_id")
+                
+                # Caso A: El ítem (either_hand) ya estaba en la otra mano, lo vaciamos (tu lógica de Swap original)
+                was_in_other_hand = (current_eq.get(f"{other_hand}_id") == req.inventory_id)
+                
+                # Caso B: Había un arma dual equipada (mismo ID en ambas manos) y estamos metiendo una de 1 mano.
+                had_dual_equipped = (current_main == current_off and current_main is not None)
+                
+                if was_in_other_hand or had_dual_equipped:
+                    update_data[f"{other_hand}_id"] = None
+
     try:
+        # Upsert insertará la fila si no existe o la actualizará si el hunter_id ya tiene equipo
         supabase_db.table("hunter_equipment").upsert(update_data).execute()
+        
+        # 6. Actualizar stats y persistir HP/MP
         new_bonuses = get_equipment_stat_bonuses(user_id)
         persist_effective_hp_mp(user_id, old_bonuses, new_bonuses)
+        
         return {
             "status": "success",
             "message": "MSG_EQUIP_SUCCESS", 
-            "equipped_at": requested_slot
+            "equipped_at": "both_hands" if allowed_slot == "dual_hand" else requested_slot
         }
     except Exception as e:
         print(f"⚠️ [DB ERROR]: {str(e)}")
@@ -139,6 +214,7 @@ async def unequip_item(slot: str, user_id: str = Depends(validate_hunter_session
     """
     Quita un objeto de un slot específico del cazador.
     Pone la columna correspondiente en hunter_equipment a NULL.
+    Si el arma es de dos manos (dual_hand), limpia ambas manos.
     """
     # 1. Lista de slots permitidos para evitar que nos inyecten columnas maliciosas
     valid_slots = [
@@ -147,16 +223,37 @@ async def unequip_item(slot: str, user_id: str = Depends(validate_hunter_session
     ]
 
     if slot not in valid_slots:
-        # Cambiado a código
         raise HTTPException(status_code=400, detail="ERR_INVALID_SLOT_NAME")
 
     # 2. Capturar bonuses ANTES de desequipar
     old_bonuses = get_equipment_stat_bonuses(user_id)
 
-    # 3. Preparamos el campo a actualizar (ej: {"head_id": None})
+    # 3. Preparamos el campo a actualizar por defecto (ej: {"head_id": None})
     update_field = {f"{slot}_id": None}
 
     try:
+        # --- LÓGICA PARA ARMAS DUALES ---
+        # Solo comprobamos si el slot que queremos vaciar es una de las manos
+        if slot in ["main_hand", "off_hand"]:
+            # Consultamos qué tiene equipado el cazador actualmente en las manos
+            eq_res = (
+                supabase_db.table("hunter_equipment")
+                .select("main_hand_id, off_hand_id")
+                .eq("hunter_id", user_id)
+                .maybe_single()
+                .execute()
+            )
+            
+            if eq_res.data:
+                main_id = eq_res.data.get("main_hand_id")
+                off_id = eq_res.data.get("off_hand_id")
+                
+                # Si el ID de la mano principal coincide con el de la mano secundaria (y no están vacíos)
+                # sabemos que es un arma "dual_hand", por lo que vaciamos ambas.
+                if main_id and off_id and (main_id == off_id):
+                    update_field["main_hand_id"] = None
+                    update_field["off_hand_id"] = None
+
         # 4. Ejecutamos la actualización en la tabla hunter_equipment
         res = (
             supabase_db.table("hunter_equipment")
@@ -165,21 +262,26 @@ async def unequip_item(slot: str, user_id: str = Depends(validate_hunter_session
             .execute()
         )
 
-        # Opcional: Verificar si el cazador existe
+        # Verificar si el cazador existe o si la actualización afectó alguna fila
         if not res.data:
             raise HTTPException(status_code=404, detail="ERR_HUNTER_NOT_FOUND")
 
+        # 5. Actualizar stats y persistir HP/MP
         new_bonuses = get_equipment_stat_bonuses(user_id)
         persist_effective_hp_mp(user_id, old_bonuses, new_bonuses)
 
+    except HTTPException:
+        # Importante: re-lanzamos la HTTPException (como el 404) para que no caiga en el bloque Exception genérico
+        raise
     except Exception as e:
-        print(f"Error al desequipar: {e}")
+        print(f"⚠️ [DB ERROR] Error al desequipar: {e}")
         raise HTTPException(status_code=500, detail="ERR_INTERNAL_DB_FAILURE")
 
     return {
         "status": "success",
         "message": "MSG_UNEQUIP_SUCCESS",
-        "slot_vaciado": slot
+        # Si update_field tiene 2 claves, significa que se vaciaron ambas manos
+        "slot_vaciado": "both_hands" if len(update_field) > 1 else slot
     }
 
 @router.post("/sell/{inventory_id}")

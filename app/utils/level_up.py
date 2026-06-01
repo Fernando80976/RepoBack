@@ -1,6 +1,25 @@
 import math
 from datetime import datetime, timezone
 from app.utils.battle.constants import _cap_int4
+from app.routers.dungeons import _auto_assign_level_missions
+from app.core.config import supabase_db
+
+
+def get_rank_for_level(level: int) -> str:
+    if level >= 90:
+        return "S"
+    elif level >= 80:
+        return "A"
+    elif level >= 60:
+        return "B"
+    elif level >= 45:
+        return "C"
+    elif level >= 25:
+        return "D"
+    elif level >= 10:
+        return "E"
+    else:
+        return "E"
 
 
 def check_level_up(profile: dict):
@@ -31,6 +50,14 @@ def check_level_up(profile: dict):
         )
         new_data["exp_next_level"] = _cap_int4(new_data["exp_next_level"])
 
+    # Calcular rango según nivel
+    new_data["rank"] = get_rank_for_level(new_data["level"])
+
+    # --- ASIGNAR MISIONES DE DUNGEON SEGÚN NIVEL ---
+    user_id = profile["id"] if "id" in profile else None
+    if user_id:
+        _auto_assign_level_missions(user_id, new_data["level"])
+
     if leveled_up:
         return {
             "level": new_data["level"],
@@ -44,5 +71,6 @@ def check_level_up(profile: dict):
             "mp_current": new_data["mp_max"],
             "fatigue": 0,
             "updated_at": datetime.now(timezone.utc).isoformat(),
+            "rank": new_data["rank"],
         }
     return None

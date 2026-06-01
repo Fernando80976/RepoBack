@@ -49,7 +49,7 @@ async def signup(datos: SignupSchema, response: Response):
         token = auth_response.session.access_token
         response.set_cookie(
             key="hunter_session", value=token,
-            httponly=True, max_age=3600 * 24, samesite="lax", secure=False, path="/"
+            httponly=True, max_age=3600 * 24, samesite="none", secure=True, path="/"
         )
         return {"status": "success", "message": "MSG_SIGNUP_SUCCESS", "user": auth_response.user}
     
@@ -92,7 +92,7 @@ async def login(datos: LoginSchema, response: Response):
     token = auth_response.session.access_token
     response.set_cookie(
         key="hunter_session", value=token,
-        httponly=True, max_age=3600 * 24, samesite="lax", secure=False, path="/"
+        httponly=True, max_age=3600 * 24, samesite="none", secure=True, path="/"
     )
     return {"status": "success", "mensaje": "MSG_LOGIN_SUCCESS", "user": auth_response.user}
 
